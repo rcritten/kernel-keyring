@@ -12,7 +12,7 @@ from keyring.backends import kernel_keyring
 class KernelKeyringTests(BackendBasicTests):
 
     def setUp(self):
-        if not kernel_keyring.KernelKeyring.viable():
+        if not kernel_keyring.VolatileKernelKeyring.viable():
             self.skipTest("keyctl not available")
         super(KernelKeyringTests, self).setUp()
         self.keyring = self.init_keyring()
@@ -38,7 +38,7 @@ class KernelKeyringTests(BackendBasicTests):
 class BadSyncKernelKeyringTests(object):
 
     def setUp(self):
-        if not kernel_keyring.KernelKeyring.viable():
+        if not kernel_keyring.VolatileKernelKeyring.viable():
             self.skipTest("keyctl not available")
         super(BadSyncKernelKeyringTests, self).setUp()
         self.keyring = self.init_keyring()
@@ -72,15 +72,36 @@ class BadSyncKernelKeyringTests(object):
 class EncryptedFileKeyringTestCase(KernelKeyringTests, unittest.TestCase):
 
     def init_keyring(self):
-        keyring = kernel_keyring.KernelEncryptedKeyring()
+        keyring = kernel_keyring.VolatileKernelEncryptedKeyring()
         keyring.kernel_key = 'python-keyring-unit-tests'
         keyring.filename = 'python-keyring-unit-tests'
         return keyring
 
+
 class BadSyncKeyringTestCase(BadSyncKernelKeyringTests, unittest.TestCase):
 
     def init_keyring(self):
-        keyring = kernel_keyring.KernelEncryptedKeyring()
+        keyring = kernel_keyring.VolatileKernelEncryptedKeyring()
+        keyring.kernel_key = 'python-keyring-unit-tests'
+        keyring.filename = 'python-keyring-unit-tests'
+        return keyring
+
+
+class UserEncryptedFileKeyringTestCase(KernelKeyringTests, unittest.TestCase):
+    """Test using a non-default keyring type"""
+
+    def init_keyring(self):
+        keyring = kernel_keyring.VolatileKernelEncryptedKeyring('@u')
+        keyring.kernel_key = 'python-keyring-unit-tests'
+        keyring.filename = 'python-keyring-unit-tests'
+        return keyring
+
+
+class UserBadSyncKeyringTestCase(BadSyncKernelKeyringTests, unittest.TestCase):
+    """Test using a non-default keyring type"""
+
+    def init_keyring(self):
+        keyring = kernel_keyring.VolatileKernelEncryptedKeyring('@u')
         keyring.kernel_key = 'python-keyring-unit-tests'
         keyring.filename = 'python-keyring-unit-tests'
         return keyring

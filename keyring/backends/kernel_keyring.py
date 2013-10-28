@@ -3,11 +3,27 @@ import keyring
 import random
 import subprocess
 from keyring.util import properties
+from keyring.backend import KeyringBackend
 
-KEYRING = '@s'
 KEYTYPE = 'user'
 KEYRING_TOKEN = 'python-keyring'
 
+"""
+IMPORTANT: This backend differs from other keyring backends in that
+           it is not persistent and not necessarily shared between the same
+           user in different shells (see keyring_type). Any data stored
+           in this backend will not be preserved between reboots at a
+           minimum, and could be cleared at other times as well. Calling
+           programs need to be able to handle refreshing credentials stored
+           in this backend.
+
+PURPOSE: Why have this backend at all? It is so you can provide arbitrarily
+         large password storage in a secure way without user-intervention.
+         This combines a file-based backend with the Linux kernel to store
+         the key to that backend. The kernel has limited memory available
+         to store data in its own keyring, using a file provides
+         significantly more space.
+"""
 
 def _run(args, stdin=None):
     """
@@ -24,7 +40,34 @@ def _run(args, stdin=None):
     return (output, err, retcode)
 
 
-class KernelKeyring(object):
+class VolatileKernelKeyring(KeyringBackend):
+    """
+    This backend is intended to be used with another backend to provide
+    the actual password storage. This backend manages only the key to
+    the other backend so that no user-intervention is required.
+    """
+
+    def __init__(self, keyring_type):
+        """
+        keyring_type can be one of:
+          Thread keyring: @t
+          Process keyring: @p
+          Session keyring: @s
+          User keyring: @u
+          User default session keyring: @us
+          Group-specific keyring: @g
+
+          See man keyctl for more information.
+        """
+        if str(keyring_type) not in ['@t', '@p', '@s', '@u', '@us', '@g']:
+            raise RuntimeError("keyring type '%s' not supported." %
+                keyring_type)
+        self._keyring_type = keyring_type
+
+    @properties.ClassProperty
+    @classmethod
+    def priority(self):
+        return 0
 
     @classmethod
     def viable(cls):
@@ -34,6 +77,21 @@ class KernelKeyring(object):
             return False
         return True
 
+    def get_password(self, service, username):
+        """Get password of the username for the service
+        """
+        raise NotImplementedError('handled at a higher level')
+
+    def set_password(self, service, username, password):
+        """Set password for the username of the service
+        """
+        raise NotImplementedError('handled at a higher level')
+
+    def delete_password(self, service, username):
+        """Delete the password for the username of the service.
+        """
+        raise NotImplementedError('handled at a higher level')
+
     def _get_real_key(self, key):
         """
         One cannot request a key based on the description it was created with
@@ -41,7 +99,7 @@ class KernelKeyring(object):
         """
         (stdout, stderr, retcode) = _run(['keyctl',
                                           'search',
-                                          KEYRING,
+                                          self._keyring_type,
                                           KEYTYPE,
                                           key])
         if retcode:
@@ -74,7 +132,7 @@ class KernelKeyring(object):
                                               'padd',
                                               KEYTYPE,
                                               key,
-                                              KEYRING],
+                                              self._keyring_type],
                                               stdin=value)
         if retcode:
             raise ValueError('Storing key failed: %s' % stderr)
@@ -108,12 +166,12 @@ class KernelKeyring(object):
         (stdout, stderr, retcode) = _run(['keyctl',
                                           'unlink',
                                           real_key,
-                                          KEYRING])
+                                          self._keyring_type])
         if retcode:
             raise ValueError('Clear entry failed: %s' % stderr)
 
 
-class KernelEncryptedKeyring(keyring.backends.file.EncryptedKeyring):
+class VolatileKernelEncryptedKeyring(keyring.backends.file.EncryptedKeyring):
     """
     Provide an interface to an encrypted python-keyring data store without
     requiring user-intervention by storing the password in the kernel
@@ -126,7 +184,9 @@ class KernelEncryptedKeyring(keyring.backends.file.EncryptedKeyring):
 
     filename = 'kernel_encrypted_keyring.cfg'
     kernel_key = KEYRING_TOKEN
-    kernel_keyring = KernelKeyring()
+
+    def __init__(self, keyring_type='@s'):
+        self.kernel_keyring = VolatileKernelKeyring(keyring_type)
 
     @properties.NonDataProperty
     def file_path(self):
@@ -164,13 +224,13 @@ class KernelEncryptedKeyring(keyring.backends.file.EncryptedKeyring):
             return None
 
         try:
-            ref_pw = super(KernelEncryptedKeyring, self).get_password('keyring-setting', 'password reference')
+            ref_pw = super(VolatileKernelEncryptedKeyring, self).get_password('keyring-setting', 'password reference')
             assert ref_pw == 'password reference value'
         except AssertionError:
             self._lock()
             return None
         else:
-            return super(KernelEncryptedKeyring, self).get_password(service, username)
+            return super(VolatileKernelEncryptedKeyring, self).get_password(service, username)
 
     def _unlock(self):
         """
@@ -187,4 +247,4 @@ class KernelEncryptedKeyring(keyring.backends.file.EncryptedKeyring):
         if os.path.exists(self.file_path):
             os.unlink(self.file_path)
         self.kernel_keyring.clear_value(self.kernel_key)
-        super(KernelEncryptedKeyring, self)._lock()
+        super(VolatileKernelEncryptedKeyring, self)._lock()
